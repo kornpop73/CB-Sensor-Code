@@ -35,7 +35,26 @@ float prevAverage = 0.0;
 
 unsigned long lastCheckTime = 0;
 
+// === Button Configuration ===
+const int buttonPins[4] = {8, 9, 10, 12};
+volatile byte buttonStates = 0;         // Current button toggle states (bitmask)
+volatile byte randomSequence = 0;       // Random 4-bit target
+unsigned long lastDebounceTime[4] = {0, 0, 0, 0};
+const unsigned long debounceDelay = 50;
+volatile byte lastButtonReadings = 0;
+
+
+
 void setup() {
+    // === Button Setup ===
+    lastButtonReadings = PINB;
+    for (int i = 0; i < 4; i++) {
+    pinMode(buttonPins[i], INPUT_PULLUP);
+    }
+    generateRandomSequence();
+    enableButtonInterrupts();
+
+
     Serial.begin(115200);
     Serial1.begin(115200);
     delay(1000);
@@ -57,11 +76,18 @@ void setup() {
     sum = 0;
 
     setupTimer1();
-    Serial.println("Version: v1.24")
+    Serial.println("Version: v1.26");
 }
 
 void loop() {
     unsigned long currentTime = millis();
+      for (int i = 0; i < 4; i++) {
+      Serial.print("Pin ");
+     Serial.print(buttonPins[i]);
+      Serial.print(": ");
+      Serial.println(digitalRead(buttonPins[i]));
+    }
+delay(500);
 
     // Move Y up
     moveY(Y_UP);
@@ -108,15 +134,15 @@ void loop() {
         input.trim();
         if (input.length() > 0) {
             Serial1.println(input);
-            Serial.print("↪ Sent to Grbl: ");
-            Serial.println(input);
+            //Serial.print("↪ Sent to Grbl: ");
+            //Serial.println(input);
         }
     }
 
     while (Serial1.available()) {
         String response = Serial1.readStringUntil('\n');
-        Serial.print("⤷ Grbl: ");
-        Serial.println(response);
+        //Serial.print("⤷ Grbl: ");
+        //Serial.println(response);
     }
   
         // Auto-homing check
@@ -181,8 +207,8 @@ bool sendGcode(String command) {
     while (true) {
         if (Serial1.available()) {
             String response = Serial1.readStringUntil('\n');
-            Serial.print("Grbl Response: ");
-            Serial.println(response);
+            //Serial.print("Grbl Response: ");
+            //Serial.println(response);
             if (response.indexOf("ok") >= 0) return true;
             if (response.startsWith("error") || response.startsWith("ALARM")) return false;
         }
@@ -285,4 +311,56 @@ void rehome() {
     homeX();
     homeY();
     Serial.println("✅ Rehoming complete.");
+}
+
+void generateRandomSequence() {
+    randomSeed(analogRead(A1));  // Use noise for better randomness
+    randomSequence = random(0, 16); // 0 to 15 (4-bit number)
+    Serial.print("🎲 Random Code: ");
+    printBits(randomSequence);
+}
+
+void printBits(byte val) {
+    for (int i = 3; i >= 0; i--) {
+        Serial.print((val >> i) & 1);
+    }
+    Serial.println();
+}
+
+void enableButtonInterrupts() {
+    PCICR |= (1 << PCIE0);  // Enable pin change interrupt for PORTB (pins 8–13)
+    PCMSK0 |= (1 << PCINT0) | (1 << PCINT1) | (1 << PCINT2) | (1 << PCINT4);
+}
+
+ISR(PCINT0_vect) {
+    byte currentReadings = PINB;
+    byte changed = lastButtonReadings ^ currentReadings;
+
+    const byte bitMasks[4] = { (1 << 0), (1 << 1), (1 << 2), (1 << 4) }; // pin 8, 9, 10, 12
+
+    for (int i = 0; i < 4; i++) {
+        byte bitMask = bitMasks[i];
+
+        if ((changed & bitMask) && !(currentReadings & bitMask)) {  // Detect press (falling edge)
+            unsigned long now = millis();
+            if (now - lastDebounceTime[i] > debounceDelay) {
+                buttonStates ^= (1 << i);
+
+                Serial.print("Button toggled: ");
+                Serial.println(i);
+                Serial.print("Current State: ");
+                printBits(buttonStates);
+                Serial.print("Target Code : ");
+                printBits(randomSequence);
+
+                if (buttonStates == randomSequence) {
+                    Serial.println("🎉 You guessed it!");
+                }
+
+                lastDebounceTime[i] = now;
+            }
+        }
+    }
+
+    lastButtonReadings = currentReadings;
 }
